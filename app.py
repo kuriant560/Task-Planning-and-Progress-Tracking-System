@@ -1,7 +1,8 @@
 import streamlit as st
 import datetime
 import pandas as pd
-from database import init_db, register_user, authenticate_user, add_task, get_tasks, update_task_status, delete_task
+from database import init_db, register_user, authenticate_user, add_task, get_tasks, update_task_status, delete_task, get_all_users, create_project, add_member_to_project, get_user_projects, get_project_members, get_project_tasks, get_or_create_classroom_project
+from classroom import fetch_google_classroom_assignments
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -353,7 +354,33 @@ def render_sidebar():
             if st.button(display_name, key=f"nav_{internal_name}", use_container_width=True, type=btn_type):
                 change_page(internal_name)
                 
-        render_html("<br>" * 5)
+        render_html("<br>" * 2)
+        
+        if st.button("🎓 Sync Classroom", use_container_width=True):
+            with st.spinner("Authenticating with Google Classroom..."):
+                assignments, msg = fetch_google_classroom_assignments()
+                if assignments is None:
+                    st.error(msg)
+                else:
+                    if len(assignments) == 0:
+                        st.info("No active assignments found.")
+                    else:
+                        # Add them to database
+                        proj_id = get_or_create_classroom_project(st.session_state.user_id, st.session_state.user_email)
+                        # Fetch existing to avoid duplicates (naive check by title)
+                        existing_tasks = get_project_tasks(proj_id)
+                        existing_titles = [t['title'] for t in existing_tasks]
+                        
+                        added = 0
+                        for a in assignments:
+                            if a['title'] not in existing_titles:
+                                add_task(st.session_state.user_id, a['title'], a['description'], "High", "To Do", a['due_date'] if a['due_date'] else datetime.date.today().strftime("%Y-%m-%d"), st.session_state.user_email, proj_id)
+                                added += 1
+                        st.success(f"Successfully synced {added} new assignments from Classroom!")
+                        st.rerun()
+                        
+        render_html("<br>" * 2)
+        
         email_prefix = st.session_state.user_email.split('@')[0].capitalize()
         render_html(f"""
             <div class="profile-block">
@@ -384,7 +411,7 @@ def check_overdue(due_date_str, status):
         return False
 
 def dashboard_view():
-    tasks = get_tasks(st.session_state.user_id)
+    tasks = get_tasks(st.session_state.user_id, st.session_state.user_email)
     today = datetime.date.today()
     
     overdue_count = sum(1 for t in tasks if check_overdue(t['due_date'], t['status']))
@@ -462,7 +489,11 @@ def render_task_card(task):
             </div>
             <div style="margin-bottom: 0.75rem;">{badge}{overdue_badge}</div>
             <div style="font-size: 0.875rem; color: var(--text-muted); margin-bottom: 1rem; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;">{task['description']}</div>
-            <div style="margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-muted);">📅 {task['due_date']}</div>
+            <div style="margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-muted); display: flex; justify-content: space-between;">
+                <span>📅 {task['due_date']}</span>
+                <span>👤 {task['assignee'].split('@')[0]}</span>
+            </div>
+            <div style="font-size: 0.75rem; background: var(--card-alt); padding: 0.2rem 0.5rem; border-radius: 4px; display: inline-block; margin-bottom: 0.5rem;">📁 {task.get('project_name', 'Personal Workspace')}</div>
         """)
         
         c1, c2 = st.columns(2)
@@ -501,7 +532,7 @@ def tasks_view():
         with f3: filter_stat = st.selectbox("Status", ["All", "To Do", "In Progress", "Completed"])
         with f4: filter_overdue = st.checkbox("Overdue Only")
 
-    tasks = get_tasks(st.session_state.user_id)
+    tasks = get_tasks(st.session_state.user_id, st.session_state.user_email)
     
     # Apply filters
     if search_q: tasks = [t for t in tasks if search_q.lower() in t['title'].lower()]
@@ -528,7 +559,7 @@ def tasks_view():
 
 def calendar_view():
     render_html("<h2>Calendar 📅</h2><p>View tasks by upcoming deadlines.</p>")
-    tasks = get_tasks(st.session_state.user_id)
+    tasks = get_tasks(st.session_state.user_id, st.session_state.user_email)
     active_tasks = [t for t in tasks if t['status'] != 'Completed']
     active_tasks.sort(key=lambda x: x['due_date'])
     
@@ -553,6 +584,19 @@ def calendar_view():
 
 def add_task_view():
     render_html("<h2>Create New Task</h2>")
+    
+    projects = get_user_projects(st.session_state.user_email)
+    if not projects:
+        st.warning("You must be part of a Project to create tasks.")
+        return
+        
+    project_options = {p['name']: p['id'] for p in projects}
+    selected_proj_name = st.selectbox("Select Project Workspace", list(project_options.keys()))
+    proj_id = project_options[selected_proj_name]
+    
+    proj_members = get_project_members(proj_id)
+    current_email = st.session_state.user_email
+    
     with st.container(border=True):
         with st.form("add_task_form", border=False):
             t_name = st.text_input("Task Title *", placeholder="e.g., Design new landing page")
@@ -562,6 +606,8 @@ def add_task_view():
             with c_s: t_stat = st.selectbox("Initial Status", ["To Do", "In Progress", "Completed"])
             with c_d: t_dead = st.date_input("Due Date *")
             
+            t_assignee = st.selectbox("Assign To (Project Members)", options=proj_members, index=proj_members.index(current_email) if current_email in proj_members else 0)
+            
             c1, c2 = st.columns(2)
             with c1: cancel = st.form_submit_button("Cancel", use_container_width=True)
             with c2: submit = st.form_submit_button("Create Task", type="primary", use_container_width=True)
@@ -569,24 +615,63 @@ def add_task_view():
             if submit:
                 if not t_name: st.error("Task Title is required.")
                 else:
-                    add_task(st.session_state.user_id, t_name, t_desc, t_prio, t_stat, t_dead.strftime("%Y-%m-%d"), st.session_state.user_email)
-                    st.success("Task added successfully!")
+                    add_task(st.session_state.user_id, t_name, t_desc, t_prio, t_stat, t_dead.strftime("%Y-%m-%d"), t_assignee, proj_id)
+                    st.success(f"Task created in {selected_proj_name}!")
                     change_page('Tasks')
             if cancel: change_page('Tasks')
 
 def projects_view():
-    render_html("<h2>Projects 📁</h2><p>Manage your active projects</p>")
-    with st.container(border=True):
-        for title, pct, color, desc in [("🟣 Website Redesign", "65%", "#A855F7", "Complete UI overhaul"), ("🔵 Mobile App", "42%", "#3B82F6", "iOS and Android apps")]:
+    render_html("<h2>Projects 📁</h2><p>Manage your active workspaces and teams.</p>")
+    
+    with st.expander("➕ Create New Project", expanded=False):
+        with st.form("new_proj_form"):
+            p_name = st.text_input("Project Name *")
+            p_desc = st.text_area("Description")
+            if st.form_submit_button("Create Project", type="primary"):
+                if p_name:
+                    create_project(p_name, p_desc, st.session_state.user_id, st.session_state.user_email)
+                    st.success("Project created successfully!")
+                    st.rerun()
+                else:
+                    st.error("Project Name is required.")
+                    
+    projects = get_user_projects(st.session_state.user_email)
+    if not projects:
+        st.info("No projects found. Create one above to get started!")
+        return
+        
+    all_users = get_all_users()
+    
+    for p in projects:
+        with st.container(border=True):
+            members = get_project_members(p['id'])
+            tasks = get_project_tasks(p['id'])
+            
+            total = len(tasks)
+            comp = sum(1 for t in tasks if t['status'] == 'Completed')
+            pct = int((comp / total * 100)) if total > 0 else 0
+            
             render_html(f"""
-            <div style="background: var(--card-alt); padding: 1.5rem; border-radius: 12px; margin-bottom: 1rem; border: 1px solid var(--border-color);">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-                    <div><div style="font-weight: 600; font-size: 1.1rem;">{title}</div><div style="font-size: 0.875rem; color: var(--text-muted);">{desc}</div></div>
-                    <span style="font-weight: 600; color: {color}; font-size: 1.25rem;">{pct}</span>
-                </div>
-                <div class="progress-bar-container" style="height: 6px; margin-top: 1rem;"><div class="progress-bar-fill" style="width: {pct}; background: {color};"></div></div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                <div><div style="font-weight: 600; font-size: 1.25rem;">{p['name']}</div><div style="font-size: 0.875rem; color: var(--text-muted);">{p['description']}</div></div>
+                <span style="font-weight: 600; color: #A855F7; font-size: 1.25rem;">{pct}%</span>
             </div>
+            <div class="progress-bar-container" style="height: 6px; margin-top: 1rem; margin-bottom: 1.5rem;"><div class="progress-bar-fill" style="width: {pct}%;"></div></div>
             """)
+            
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                st.markdown(f"**Team Members ({len(members)}):** " + ", ".join([m.split('@')[0] for m in members]))
+            with c2:
+                with st.popover("Add Member"):
+                    available = [u for u in all_users if u not in members]
+                    if not available:
+                        st.info("All users are already members.")
+                    else:
+                        new_member = st.selectbox("Select User", available, key=f"sel_{p['id']}")
+                        if st.button("Invite", key=f"inv_{p['id']}", type="primary"):
+                            add_member_to_project(p['id'], new_member)
+                            st.rerun()
 
 def main():
     init_db()

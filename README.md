@@ -23,6 +23,16 @@ This project was developed for the **Software Engineering and Project Management
 - **Weekly Productivity Trend**: A dynamic line chart that plots historical task completion rates over the last 7 days.
 - **Smart Insights**: Contextual alerts that automatically warn you if you have tasks due today or tasks that are overdue.
 
+### 📁 Relational Project Management & Team Collaboration
+- **Dynamic Workspaces**: Create custom projects and invite other registered team members into your workspaces.
+- **Smart Assignment**: When adding a task to a project, the system intelligently restricts the "Assign To" dropdown to only users who are verified members of that specific project.
+- **Live Syncing**: Tasks assigned to a team member instantly appear on their personal Kanban board and Dashboard.
+
+### 🎓 Google Classroom Sync Integration
+- **OAuth 2.0 Integration**: Securely authenticate with your real Google account using the Google Cloud Classroom API.
+- **Smart Fetching**: Pulls all active coursework directly into your planner while intelligently filtering out non-actionable "Materials".
+- **Auto-Grouping**: Synced assignments are automatically organized under a dedicated "Google Classroom" project workspace.
+
 ### 📋 Interactive Kanban Board
 - A structured 3-column layout (**To Do**, **In Progress**, **Completed**).
 - **1-Click Actions**: Simulated drag-and-drop workflow allows users to move tasks between stages instantly with a single button click.
@@ -67,7 +77,12 @@ This project was developed for the **Software Engineering and Project Management
    pip install -r requirements.txt
    ```
 
-4. **Run the Application**
+4. **Set Up Google Classroom (Optional)**
+   - Go to the Google Cloud Console and create an OAuth Desktop App Client ID.
+   - Download the JSON file, rename it to `credentials.json`, and place it in the root directory.
+   - This enables the "Sync Classroom" button to securely fetch your assignments.
+
+5. **Run the Application**
    ```bash
    streamlit run app.py
    ```
