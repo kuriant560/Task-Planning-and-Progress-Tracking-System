@@ -16,3 +16,6 @@ def dashboard_view():
 
 def tasks_view():
     pass
+
+def calendar_view():
+    pass
