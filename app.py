@@ -7,3 +7,6 @@ def inject_custom_css():
 
 def render_sidebar():
     pass
+
+def auth_view():
+    pass
