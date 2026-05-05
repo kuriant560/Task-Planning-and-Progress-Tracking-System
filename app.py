@@ -13,3 +13,6 @@ def auth_view():
 
 def dashboard_view():
     pass
+
+def tasks_view():
+    pass
