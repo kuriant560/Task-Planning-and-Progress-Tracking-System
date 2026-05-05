@@ -10,3 +10,6 @@ def render_sidebar():
 
 def auth_view():
     pass
+
+def dashboard_view():
+    pass
